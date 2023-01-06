@@ -14,7 +14,7 @@
 #  +	command is executed even if Make is invoked in "do not exec" mode
 
 OS := $(shell uname)
-HOSTNAME := $(shell hostname)
+HOSTNAME := cat /etc/hostname
 
 IDENTIFY_CURRENT_MAKEFILE_RELATIVE_FUNCTION = $(word $(words $(MAKEFILE_LIST)),$(MAKEFILE_LIST))
 MAKEFILE_BASE_POSIX_MAK := $(call IDENTIFY_CURRENT_MAKEFILE_RELATIVE_FUNCTION)
@@ -112,6 +112,11 @@ ifeq ($(TARGET_PLATFORM),linux64)
 	CPPFLAGS += -fPIC
 endif
 
+# When we move to a modern toolchain, this will be necessary for early testing
+# until we can ensure that every user has libraries built against the new C++11
+# ABI. Further reading here:
+# https://gcc.gnu.org/onlinedocs/libstdc++/manual/using_dual_abi.html
+DEFINES += -D_GLIBCXX_USE_CXX11_ABI=0
 
 CFLAGS = $(ARCH_FLAGS) $(CPPFLAGS) $(WARN_FLAGS) -fvisibility=$(SymbolVisibility) $(OptimizerLevel) -ffast-math -pipe $(GCC_ExtraCompilerFlags) -Usprintf -Ustrncpy -UPROTECTED_THINGS_ENABLE
 # In -std=gnu++11 mode we get lots of errors about "error: narrowing conversion". -fpermissive
@@ -131,65 +136,23 @@ DEFINES += -D_FILE_OFFSET_BITS=64
 LDFLAGS = $(CFLAGS) $(GCC_ExtraLinkerFlags) $(OptimizerLevel)
 GENDEP_CXXFLAGS = -MD -MP -MF $(@:.o=.P) 
 MAP_FLAGS =
-
-ifeq ($(STEAM_BRANCH),1)
-	WARN_FLAGS = -Wall -Wextra -Wshadow -Wno-invalid-offsetof
-else
-	WARN_FLAGS = -Wno-write-strings -Wno-multichar
-endif
-
-WARN_FLAGS += -Wno-unknown-pragmas -Wno-unused-parameter -Wno-unused-value -Wno-missing-field-initializers -Wno-sign-compare -Wno-reorder -Wno-invalid-offsetof -Wno-float-equal -Wno-switch -fdiagnostics-show-option -Wformat -Werror=format-security -Wstrict-aliasing=2
-
+WARN_FLAGS = -w -fdiagnostics-color=always
 
 ifeq ($(OS),Linux)
 	# We should always specify -Wl,--build-id, as documented at:
 	# http://linux.die.net/man/1/ld and http://fedoraproject.org/wiki/Releases/FeatureBuildId.http://fedoraproject.org/wiki/Releases/FeatureBuildId
 	LDFLAGS += -Wl,--build-id
 
-	UUID_LIB =
-
-	# Set USE_STEAM_RUNTIME to build with the Steam Runtime. Otherwise uses
-	# The toolchain in /valve
-	ifneq ($(USE_STEAM_RUNTIME),1)
-		# dedicated server flags
-		ifeq ($(TARGET_PLATFORM),linux64)
-			VALVE_BINDIR = /valve/bin64/
-			MARCH_TARGET = nocona
-		else
-			VALVE_BINDIR = /valve/bin/
-			MARCH_TARGET = pentium4
-		endif
-		STRIP_FLAGS = -x
-		LIBCPP_EXT = a
-
+	ifeq ($(TARGET_PLATFORM),linux64)
+		MARCH_TARGET = nocona
 	else
-		# linux desktop client flags
-		VALVE_BINDIR =
-		DEFINES +=
-		# If the steam-runtime is available, use it. We should just default to using it when
-		#  buildbot and everyone has a bit of time to get it installed.
-		ifneq "$(wildcard /valve/steam-runtime/bin/)" ""
-			# The steam-runtime is incompatible with clang at this point, so disable it
-			# if clang is enabled.
-			ifneq ($(CXX),clang++)
-				VALVE_BINDIR = /valve/steam-runtime/bin/
-			endif
-		endif
-		GCC_VER =
-
-		ifeq ($(TARGET_PLATFORM),linux64)
-			MARCH_TARGET = nocona
-		else
-			MARCH_TARGET = pentium4
-		endif
-		# On dedicated servers, some plugins depend on global variable symbols in addition to functions.
-		# So symbols like _Z16ClearMultiDamagev should show up when you do "nm server_srv.so" in TF2.
-		STRIP_FLAGS = -x
-
-		LIBCPP_EXT = so
-
-		UUID_LIB = -luuid
+		MARCH_TARGET = pentium4
 	endif
+	STRIP_FLAGS = -x
+
+	LIBCPP_EXT = so
+
+	UUID_LIB = -luuid
 
 	# We want to make all TLS use the global-dynamic
 	# model, to avoid having to use -fpic but avoid problems with dlopen()
@@ -217,19 +180,16 @@ ifeq ($(OS),Linux)
 		# fails due to memory exhaustion.
 		CFLAGS += -g0
 	endif
-	CCACHE := $(SRCROOT)/devtools/bin/linux/ccache
+	CCACHE := ccache
 
-	ifeq ($(origin GCC_VER), undefined)
-	GCC_VER=-4.6
-	endif
 	ifeq ($(origin AR), default)
-		AR = $(VALVE_BINDIR)ar crs
+		AR = ar crs
 	endif
 	ifeq ($(origin CC),default)
-		CC = $(CCACHE) $(VALVE_BINDIR)gcc$(GCC_VER)	
+		CC = $(CCACHE) gcc
 	endif
 	ifeq ($(origin CXX), default)
-		CXX = $(CCACHE) $(VALVE_BINDIR)g++$(GCC_VER)
+		CXX = $(CCACHE) g++
 	endif
 	# Support ccache with clang. Add -Qunused-arguments to avoid excessive warnings due to
 	# a ccache quirk. Could also upgrade ccache.
@@ -452,34 +412,10 @@ else
 		$(CXX) $(CXXFLAGS) $(GENDEP_CXXFLAGS) -o $@ -c $<
 endif
 
-ifneq "$(origin VALVE_NO_AUTO_P4)" "undefined"
-	P4_EDIT_START = chmod -R +w
-	P4_EDIT_END = || true
-	P4_REVERT_START = true
-	P4_REVERT_END =
-else
-	ifndef P4_EDIT_CHANGELIST
-		# You can use an environment variable to specify what changelist to check the Linux Binaries out into. Normally the default
-		# setting is best, but here is an alternate example:
-		# export P4_EDIT_CHANGELIST_CMD="echo 1424335"
-		# ?= means that if P4_EDIT_CHANGELIST_CMD is already set it won't be changed.
-		P4_EDIT_CHANGELIST_CMD ?= p4 changes -c `p4 client -o | grep ^Client | cut -f 2` -s pending | fgrep 'POSIX Auto Checkout' | cut -d' ' -f 2 | tail -n 1
-		P4_EDIT_CHANGELIST := $(shell $(P4_EDIT_CHANGELIST_CMD))
-	endif
-	ifeq ($(P4_EDIT_CHANGELIST),)
-		# If we haven't found a changelist to check out to then create one. The name must match the one from a few
-		# lines above or else a new changelist will be created each time.
-		# Warning: the behavior of 'echo' is not consistent. In bash you need the "-e" option in order for \n to be
-		# interpreted as a line-feed, but in dash you do not, and if "-e" is passed along then it is printed, which
-		# confuses p4. So, if you run this command from the bash shell don't forget to add "-e" to the echo command.
-		P4_EDIT_CHANGELIST = $(shell echo "Change: new\nDescription: POSIX Auto Checkout" | p4 change -i | cut -f 2 -d ' ')
-	endif
-
-	P4_EDIT_START := for f in
-	P4_EDIT_END := ; do if [ -n $$f ]; then if [ -d $$f ]; then find $$f -type f -print | p4 -x - edit -c $(P4_EDIT_CHANGELIST); else p4 edit -c $(P4_EDIT_CHANGELIST) $$f; fi; fi; done $(QUIET_ECHO_POSTFIX)
-	P4_REVERT_START := for f in  
-	P4_REVERT_END := ; do if [ -n $$f ]; then if [ -d $$f ]; then find $$f -type f -print | p4 -x - revert; else p4 revert $$f; fi; fi; done $(QUIET_ECHO_POSTFIX) 
-endif
+P4_EDIT_START = chmod -R +w
+P4_EDIT_END = || true
+P4_REVERT_START = true
+P4_REVERT_END =
 
 ifeq ($(CONFTYPE),dll)
 all: $(OTHER_DEPENDENCIES) $(OBJS) $(GAMEOUTPUTFILE)

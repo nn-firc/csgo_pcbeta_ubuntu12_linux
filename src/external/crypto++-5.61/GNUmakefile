@@ -3,7 +3,7 @@ SHELL=/bin/bash
 CXXFLAGS = -DNDEBUG -g -O2
 #CXXFLAGS = -g
 # -fPIC is supported. Please report any breakage of -fPIC as a bug.
-CXXFLAGS += -fPIC
+CXXFLAGS += -fPIC -D_GLIBCXX_USE_CXX11_ABI=0 -fpermissive
 # the following options reduce code size, but breaks link or makes link very slow on some systems
 CXXFLAGS += -ffunction-sections -fdata-sections
 # VALVE: when steamclient.so is launched from Python the stack is not 16-byte aligned and gcc assumes
@@ -51,11 +51,12 @@ else
 # Otherwise we're building for STEAM, so use the native compile tools
   BUILDVERSION="Building libcryptopp.a for Steam"
 ifeq ($(ISX64),1)
-  CXX = /valve/steam-runtime/bin/g++ -m64
-  BINDIR  =ubuntu12_64
+  CXX = g++ -m64
+  BINDIR = linux64
+  CLIENT_EXT = _client
 else
-  CXX = /valve/steam-runtime/bin/g++ -m32
-  BINDIR  =linux32
+  CXX = g++ -m32
+  BINDIR = linux32
   CLIENT_EXT = _client
 endif
 endif 
@@ -199,7 +200,6 @@ libcryptopp.a: $(LIBOBJS)
 	$(AR) $(ARFLAGS) $@ $(LIBOBJS)
 	$(RANLIB) $@
 #VALVE: Copy the file into the right spot.
-	p4 edit ../../lib/$(BINDIR)/release/libcryptopp$(CLIENT_EXT).a
 	$(CP) libcryptopp.a ../../lib/$(BINDIR)/release/libcryptopp$(CLIENT_EXT).a
 
 libcryptopp.so: $(LIBOBJS)

@@ -1,0 +1,1 @@
+devtools/bin/vpc /f /csgo /no_scaleform +csgo_partner_linux +client +togl +shaderapi_dx9 /mksln csgo_partner_linux /linux64

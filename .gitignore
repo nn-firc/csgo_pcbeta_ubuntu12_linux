@@ -299,3 +299,11 @@ paket-files/
 *.vcxproj.vpc_crc
 *.sln
 
+#vpc
+*.o
+generated_proto/
+_vpc_/
+*.mak
+*.mak.*
+*.vpc.*
+!devtools/*.mak
